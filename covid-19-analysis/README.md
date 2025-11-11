@@ -14,6 +14,8 @@ The goal is to visualize how the number of cases, deaths, and vaccinations evolv
   - `total_deaths`: cumulative number of confirmed deaths  
   - `people_vaccinated`: total people vaccinated
 
+_*the dataset was too big to send to github_
+
 The dataset was filtered to include only data for **Brazil**.
 
 ---
