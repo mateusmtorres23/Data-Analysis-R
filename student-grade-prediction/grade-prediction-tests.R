@@ -169,8 +169,23 @@ plot_lr_coeffs <- ggplot(top_lr_coeffs, aes(x = estimate, y = fct_reorder(term, 
   scale_fill_manual(values = c(`TRUE` = "#0072b2", `FALSE` = "#D55E00"))
 print(plot_lr_coeffs)
 
+all_metrics <- bind_rows(
+  math_metrics_lr %>% mutate(model = "Linear Regression", subject = "Math"),
+  math_metrics_rf %>% mutate(model = "Random Forest", subject = "Math"),
+  port_metrics_lr %>% mutate(model = "Linear Regression", subject = "Portuguese"),
+  port_metrics_rf %>% mutate(model = "Random Forest", subject = "Portuguese")
+)
 
-
+ggplot(all_metrics, aes(x = model, y = .estimate, fill = model)) +
+  geom_col(show.legend = FALSE) +
+  facet_grid(.metric ~ subject, scales = "free_y") +
+  labs(
+    title = "Model performance comparison",
+    subtitle = "Comparing RMSE and R-Squared for Math & Portuguese",
+    x = "Model type",
+    y = "Metric estimate"
+  ) +
+  theme_minimal()
 
 
 

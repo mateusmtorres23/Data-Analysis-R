@@ -1,8 +1,247 @@
 ---
-title: "student-grade-predction"
-output: html_document
+title: "Student Performance Prediction"
+author: "Mateus Montalvão Torres"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: united
+    toc: true
+    toc_float: true
 ---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Load libraries
+library(tidyverse)
+library(tidymodels)
+```
+
+1.  Introduction
+
+This project uses the "Student Performance" dataset from the UCI Machine Learning Repository to predict the final grades (G3) of students in both Math and Portuguese. The primary objective is to compare two machine learning models—Linear Regression and Random Forest—to determine which provides the best predictive performance. Finally, we will interpret the winning model to identify the most significant predictors of student success.
+
+2.  Data Ingestion and Cleaning
+
+First, we load the two separate datasets (student-mat.csv and student-por.csv). We identified 13 common demographic and social columns, which are used as keys for an inner_join. This results in a single dataframe (d3_clean) containing the 382 students who are present in both files. The .x and .y suffixes from the join are then programmatically renamed to \_mat and \_por for clarity.
+
+```{r setup}
+# Load data
+d1 <- read_delim("Data/student-mat.csv", delim = ";")
+d2 <- read_delim("Data/student-por.csv", delim = ";")
+
+# Define merge keys
+merge_keys <- c("school", "sex", "age", "address", "famsize", "Pstatus", 
+                "Medu", "Fedu", "Mjob", "Fjob", "reason", "nursery", "internet")
+
+# Join datasets
+d3 <- inner_join(d1, d2, by = merge_keys, relationship = "many-to-many")
+print(paste("Total merged students: ", nrow(d3)))
+
+# Clean column names
+d3_clean <- d3 %>%
+  rename_with(~str_replace(., "\\.x$", "_mat"), ends_with(".x")) %>%
+  rename_with(~str_replace(., "\\.y$", "_por"), ends_with(".y"))
+
+glimpse(d3_clean)
+```
+
+3.  Data Splitting
+
+We create two separate data splits: one for predicting G3_mat and another for G3_por. In both cases, we use an 80/20 train/test split. Crucially, we stratify on the target variable (the final grade) to ensure that the distribution of grades is similar in both the training and testing sets.
+
 ```{r}
+set.seed(123)
+
+# Split for Math
+math_split <- initial_split(d3_clean, prop = 0.80, strata = G3_mat)
+math_train <- training(math_split)
+math_test <- testing(math_split)
+print(paste("Math split - train/test:", nrow(math_train), "/", nrow(math_test)))
+
+# Split for Portuguese
+por_split <- initial_split(d3_clean, prop = 0.80, strata = G3_por)
+por_train <- training(por_split)
+por_test <- testing(por_split)
+print(paste("Portuguese split - train/test:", nrow(por_train), "/", nrow(por_test)))
 
 ```
+
+4.  Preprocessing (Recipes) and Model Definition
+
+We use the tidymodels framework to define our preprocessing steps and model specifications.
+
+4.1. Preprocessing Recipes
+
+Four distinct recipes are created:
+
+-   Linear Models (LM): For Linear Regression, we must remove data-leaking variables (e.g., Portuguese grades when predicting Math), create step_dummy variables for all nominal predictors, and step_normalize all numeric predictors.
+
+-   Random Forest (RF): Tree-based models like Random Forest do not require dummy variables or normalization. Therefore, these recipes are simpler and only remove the "leaky" variables.
+
+``` {r}
+# --- Math Recipes ---
+math_lm_recipe <- recipe(G3_mat ~., data = math_train) %>%
+  step_rm(ends_with("_por")) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_normalize(all_numeric_predictors())
+
+math_rf_recipe <- recipe(G3_mat ~ ., data = math_train) %>%
+  step_rm(ends_with("_por"))
+
+# --- Portuguese Recipes ---
+port_lm_recipe <- recipe(G3_por ~., data = por_train) %>%
+  step_rm(ends_with("_mat")) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_normalize(all_numeric_predictors())
+
+port_rf_recipe <- recipe(G3_por ~ ., data = por_train) %>%
+  step_rm(ends_with("_mat"))
+```
+
+4.2. Model Specifications
+
+We define the "blueprints" for our two model types.
+
+``` {r}
+lr_spec <- linear_reg() %>% set_engine("lm")
+
+rf_spec <- rand_forest() %>%
+  set_engine("ranger", importance = "permutation") %>%
+  set_mode("regression")
+```
+
+5. Training and Evaluation (Workflows)
+
+We bundle the recipes and model specifications into four distinct workflow objects. Each workflow is fit() on its respective training data, and then used to predict() on the test set. We collect performance metrics (RMSE, R-Squared, and MAE) using yardstick.
+
+``` {r}
+# --- Create Workflows ---
+math_flow_lr <- workflow() %>% add_recipe(math_lm_recipe) %>% add_model(lr_spec)
+math_flow_rf <- workflow() %>% add_recipe(math_rf_recipe) %>% add_model(rf_spec)
+port_flow_lr <- workflow() %>% add_recipe(port_lm_recipe) %>% add_model(lr_spec)
+port_flow_rf <- workflow() %>% add_recipe(port_rf_recipe) %>% add_model(rf_spec)
+
+# --- Fit and Evaluate Math Models ---
+math_fit_lr <- fit(math_flow_lr, data = math_train)
+math_metrics_lr <- predict(math_fit_lr, math_test) %>%
+  bind_cols(math_test) %>%
+  metrics(truth = G3_mat, estimate = .pred)
+
+math_fit_rf <- fit(math_flow_rf, data = math_train)
+math_metrics_rf <- predict(math_fit_rf, math_test) %>%
+  bind_cols(math_test) %>%
+  metrics(truth = G3_mat, estimate = .pred)
+
+# --- Fit and Evaluate Portuguese Models ---
+port_fit_lr <- fit(port_flow_lr, data = por_train)
+port_metrics_lr <- predict(port_fit_lr, por_test) %>%
+  bind_cols(por_test) %>%
+  metrics(truth = G3_por, estimate = .pred)
+
+port_fit_rf <- fit(port_flow_rf, data = por_train)
+port_metrics_rf <- predict(port_fit_rf, por_test) %>%
+  bind_cols(por_test) %>%
+  metrics(truth = G3_por, estimate = .pred)
+
+# --- Print Final Metrics ---
+print("--- Math LM Metrics ---")
+print(math_metrics_lr)
+print("--- Math RF Metrics ---")
+print(math_metrics_rf)
+print("--- Portuguese LM Metrics ---")
+print(port_metrics_lr)
+print("--- Portuguese RF Metrics ---")
+print(port_metrics_rf)
+```
+
+6. Model Comparison
+
+To visually compare all four models, we combine the metric tibbles into a single data frame and use ggplot with facet_grid to plot the results.
+
+``` {r}
+# Combine all metrics
+all_metrics <- bind_rows(
+  math_metrics_lr %>% mutate(model = "Linear Regression", subject = "Math"),
+  math_metrics_rf %>% mutate(model = "Random Forest", subject = "Math"),
+  port_metrics_lr %>% mutate(model = "Linear Regression", subject = "Portuguese"),
+  port_metrics_rf %>% mutate(model = "Random Forest", subject = "Portuguese")
+)
+
+# Plot metrics
+ggplot(all_metrics, aes(x = model, y = .estimate, fill = model)) +
+  geom_col(show.legend = FALSE) +
+  facet_grid(.metric ~ subject, scales = "free_y") +
+  labs(
+    title = "Model Performance Comparison",
+    subtitle = "Comparing Metrics for Math & Portuguese",
+    x = "Model Type",
+    y = "Metric Estimate"
+  ) +
+  theme_minimal()
+```
+
+Analysis: The chart clearly shows that the Linear Regression model outperformed the Random Forest model in both subjects. It produced a lower RMSE (Root Mean Squared Error) and a higher R-Squared (R²), indicating a better and more accurate predictive fit.
+
+7. Interpretation of Winning Models
+
+With Linear Regression identified as the superior model, we now extract and plot its coefficients to interpret which variables had the largest impact on the predictions.
+
+7.1. Math Model Interpretation
+
+``` {r}
+# Extract and filter Math coefficients
+math_lr_coeffs <- math_fit_lr %>%
+  extract_fit_parsnip() %>%
+  tidy()
+
+top_lr_coeffs <- math_lr_coeffs %>%
+  filter(term != "(Intercept)") %>%
+  mutate(abs_estimate = abs(estimate)) %>%
+  slice_max(n = 15, order_by = abs_estimate)
+
+# Plot Math coefficients
+ggplot(top_lr_coeffs, aes(x = estimate, y = fct_reorder(term, estimate), fill = estimate > 0)) +
+  geom_col(show.legend = FALSE) +
+  labs(
+    title = "Top 15 Predictors of Math Performance",
+    subtitle = "Coefficients from Linear Regression Model",
+    x = "Coefficient Estimate (Impact on G3_mat)",
+    y = "Predictor Term"
+  ) +
+  theme_minimal() +
+  scale_fill_manual(values = c(`TRUE` = "#0072B2", `FALSE` = "#D55E00"))
+```
+
+7.2. Portuguese Model Interpretation
+
+``` {r}
+# Extract and filter Portuguese coefficients
+port_lr_coeffs <- port_fit_lr %>%
+  extract_fit_parsnip() %>%
+  tidy()
+
+top_port_coeffs <- port_lr_coeffs %>%
+  filter(term != "(Intercept)") %>%
+  mutate(abs_estimate = abs(estimate)) %>%
+  slice_max(n = 15, order_by = abs_estimate)
+
+# Plot Portuguese coefficients
+ggplot(top_port_coeffs, aes(x = estimate, y = fct_reorder(term, estimate), fill = estimate > 0)) +
+  geom_col(show.legend = FALSE) +
+  labs(
+    title = "Top 15 Predictors of Portuguese Performance",
+    subtitle = "Coefficients from Linear Regression Model",
+    x = "Coefficient Estimate (Impact on G3_por)",
+    y = "Predictor Term"
+  ) +
+  theme_minimal() +
+  scale_fill_manual(values = c(`TRUE` = "#0072B2", `FALSE` = "#D55E00"))
+```
+
+8. Conclusion
+
+The project was successfully completed. A simple Linear Regression model proved to be more effective than a complex Random Forest model for this specific dataset. The coefficient analysis reveals, unsurprisingly, that previous grades (G1 and G2) are the most dominant predictors of the final grade (G3). Other factors, such as age and absences, also show a statistically significant impact.
+
+
 
